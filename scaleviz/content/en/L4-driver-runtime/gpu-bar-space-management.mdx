@@ -1,0 +1,241 @@
+---
+title: "GPU BAR Space Management & Mapping"
+description: "From PCIe BAR registers to NVIDIA GPU driver virtual memory management"
+date: 2026-03-27
+layer: L4
+topic: bar-mapping
+difficulty: advanced
+tags: [bar, pcie, gpu-driver, virtual-memory, mmio, rebar, p2p]
+---
+
+# GPU BAR Space Management & Mapping
+
+A fundamental question in multi-GPU systems: **How do the CPU and other devices access GPU memory?**
+
+The answer is **PCIe BAR (Base Address Register) space mapping** — one of the GPU driver's most basic responsibilities. This article traces the path from PCIe hardware specs through NVIDIA GPU driver BAR management to the CUDA VMM API.
+
+---
+
+## 1. PCIe BAR: A Device Memory Window
+
+Every PCIe device declares address ranges via **BAR registers** in its Configuration Space. The system firmware (BIOS/UEFI) assigns physical addresses during PCI enumeration.
+
+### NVIDIA GPU BAR Layout
+
+| BAR | Name | Purpose | Typical Size |
+|-----|------|---------|-------------|
+| BAR0 | Register Space | GPU engine control registers (MMIO) | 16–32 MB |
+| BAR1 | FB Aperture | Framebuffer / VRAM external mapping window | 256 MB – full VRAM |
+| BAR2/3 | Other | Additional registers | Small |
+
+- **BAR0**: The driver's interface to GPU hardware. All register reads/writes go through BAR0 MMIO.
+- **BAR1**: The external window into GPU VRAM. Any CPU, DMA engine, or PCIe peer accessing GPU memory must go through BAR1.
+
+### BAR0 Deep Dive: GPU MMIO Register Space
+
+BAR0 is the GPU driver's **command and control center**. When the kernel driver `nvidia.ko` loads,
+it `ioremap()`s BAR0's system physical address into kernel virtual address space.
+All subsequent hardware operations go through this mapping.
+
+<BAR0MMIOExplorer />
+
+#### BAR0 Address Space Layout
+
+| Address Range | Register Block | Function |
+|---------|---------|---------|
+| 0x0000–0x0FFF | **PMC** (Master Control) | Chip ID, global interrupt control, engine enable |
+| 0x0700–0x07FF | **PTIMER** | GPU internal timer, nanosecond precision |
+| 0x9000–0x9FFF | **PFIFO** | Command FIFO engine — pushbuffer processing |
+| 0x20000–0x3FFFF | **PGRAPH** | Graphics / Compute engine core control |
+| 0x88000–0x88FFF | **PCE** | Copy Engine (DMA) control |
+| 0x100000–0x10FFFF | **PFB** | Framebuffer / memory controller interface |
+| 0x800000+ | **PRIV_RING** | Falcon microcontrollers / privileged ring |
+
+#### How BAR0 Access Works
+
+```c
+// Kernel driver BAR0 access pattern
+void __iomem *bar0 = ioremap(pci_resource_start(pdev, 0),
+                             pci_resource_len(pdev, 0));
+u32 boot_id = readl(bar0 + 0x0000);  // Read GPU chip ID
+writel(engine_mask, bar0 + 0x0640);   // Enable engines
+```
+
+> **Security**: BAR0 is kernel-mode only. User-space programs cannot access BAR0 directly — CUDA APIs use ioctl to request the kernel driver to operate BAR0 registers on their behalf.
+
+---
+
+## 2. BAR1 Mapping Mechanism
+
+### Small BAR Mode (Legacy)
+
+With only 256 MB of BAR1 for 80 GB of VRAM, the driver maintains a **sliding window** — a BAR1 page table that dynamically remaps the aperture to different VRAM regions.
+
+<BAR1SlidingWindow vramGB={80} smallBarMB={256} />
+
+### Resizable BAR (ReBAR)
+
+PCIe Resizable BAR Capability allows BAR1 to expand to cover the entire VRAM:
+
+| GPU | VRAM | BAR1 (ReBAR off) | BAR1 (ReBAR on) |
+|-----|------|-------------------|-----------------|
+| A100 | 40/80 GB | 256 MB | 40/80 GB |
+| H100 | 80 GB | 256 MB | 80 GB |
+| B200 | 192 GB | 256 MB | 192 GB |
+
+ReBAR eliminates the sliding window overhead, accelerating CPU→GPU transfers and P2P communication.
+
+### TLB Flush: Ensuring Mapping Consistency
+
+The GPU's **TLB (Translation Lookaside Buffer)** caches recently used page table entries to speed up address translation. When the driver modifies the BAR1 page table (Map / Unmap / Migrate), the TLB may still hold stale entries — if not cleared, external DMA or MMIO accesses could be routed to **wrong physical VRAM addresses**, causing data corruption or GPU hangs.
+
+The TLB flush flow:
+
+1. **Driver updates BAR1 page table** — writes new SPA → GPA mappings
+2. **TLB retains stale entries** — TLB and page table are now inconsistent (**danger window**)
+3. **Driver issues TLB Invalidate command** — GPU hardware clears matching TLB lines
+4. **Subsequent access triggers TLB Refill** — hardware reloads from the updated page table, consistency restored
+
+<TLBFlushFlow />
+
+<Callout type="warning">
+**TLB flush cost:** The invalidate operation itself is fast (nanoseconds), but subsequent TLB misses and refills temporarily increase access latency. In high-frequency Map/Unmap scenarios (e.g., elastic memory pools), the driver typically **batches** multiple mapping changes and issues a single flush to amortize overhead.
+</Callout>
+
+---
+
+## 3. CUDA VMM API: User-Space BAR Management
+
+Starting with CUDA 10.2, the **cuMem API** splits the traditional `cudaMalloc` into three independent steps:
+
+<VMMPipeline />
+
+This separation enables:
+
+| Scenario | Traditional cudaMalloc | cuMem API |
+|----------|----------------------|-----------|
+| P2P Sharing | IPC handle only | Same handle mapped into multiple GPUs' VA spaces |
+| Elastic Memory | Pointer invalidated on free | VA preserved across physical reallocation |
+| Access Control | All-or-nothing | Per-device fine-grained (read-only / read-write) |
+| GPUDirect RDMA | Extra registration needed | Mark `gpuDirectRDMACapable` at allocation |
+
+---
+
+## 4. P2P Mapping: Cross-GPU BAR Path
+
+<P2PDataFlow />
+
+**PCIe P2P**: GPU A writes to GPU B's BAR1 address range → PCIe routes to GPU B → BAR1 decoder translates to local VRAM address.
+
+**NVLink P2P**: NVLink uses its own peer mapping table, bypassing BAR1 size limitations entirely.
+
+### Cross-Process P2P (IPC / Fabric Handle)
+
+| Handle Type | Transfer Method | Scenario | Min CUDA |
+|------------|-----------------|----------|----------|
+| POSIX File Descriptor | Unix Domain Socket | Same-node cross-process | 11.3 |
+| Fabric Handle | Direct messaging | Multi-node MNNVL | 12.3 |
+
+---
+
+## 5. NVLink Deep Dive: Beyond PCIe
+
+### Bandwidth Evolution
+
+NVLink bandwidth has grown over 11× from NVLink 1 (Pascal, 2016) to NVLink 5 (Blackwell, 2024), far outpacing PCIe improvements:
+
+<NVLinkBandwidth />
+
+### NVSwitch: The All-to-All Fabric
+
+NVLink alone provides point-to-point links. **NVSwitch** acts as a crossbar switch
+enabling full-bandwidth any-to-any communication between all GPUs in a node:
+
+<NVLinkTopology />
+
+| Feature | NVSwitch 3 (A100) | NVSwitch 4 (H100) | NVSwitch 5 (B200) |
+|---------|-------------------|-------------------|-------------------|
+| Ports | 36 × NVLink 3 | 64 × NVLink 4 | 64 × NVLink 5 |
+| Switch BW | 3.6 TB/s | 6.4 TB/s | 12.8 TB/s |
+| In-network Compute | ❌ | ✅ SHARP v3 | ✅ SHARP v4 |
+
+### NVLink vs BAR1 Mapping
+
+NVLink P2P **bypasses BAR1 entirely**, using a hardware **Peer Mapping Table (PMT)** inside the GPU.
+The interactive animation below contrasts the PCIe BAR1 path with the NVLink peer mapping path step by step—
+click **Play** or step through to see the full address-translation and data-flow pipeline:
+
+<NVLinkPeerMapping />
+
+#### Key Differences
+
+| Dimension | BAR1 Mapping (PCIe) | NVLink Peer Mapping |
+|-----------|-------------------|----------------|
+| Capacity | Limited by BAR1 size (256 MB–full VRAM) | Maps **entire** peer VRAM |
+| Latency | ~1–2 μs (PCIe transaction) | ~0.5 μs |
+| Bandwidth | 64 GB/s (PCIe 5.0 x16) | 900–1800 GB/s |
+| Address Translation | BAR1 decoder + page table (SPA → GPA) | **Peer Mapping Table** (GVA → Peer GPA) |
+| Atomics | Limited | Full atomic ops (atomicAdd, etc.) |
+| Mapping Setup | Driver updates BAR1 page table + TLB flush | cuMemSetAccess → hardware writes PMT entry |
+
+#### How the Peer Mapping Table Works
+
+When GPU A needs to access GPU B's VRAM over NVLink, the peer mapping path bypasses PCIe BAR entirely:
+
+1. **Physical allocation**: `cuMemCreate` on GPU B allocates physical VRAM, producing a `CUmemGenericAllocationHandle`
+2. **Handle export**: `cuMemExportToShareableHandle` packages the handle as a Fabric Handle (cross-node) or POSIX FD (same-node)
+3. **Handle import**: GPU A calls `cuMemImportFromShareableHandle` to import the peer handle
+4. **Access grant**: `cuMemSetAccess(ptr, size, GPU_B_location)` triggers the driver to write a **Peer Mapping Table** entry in GPU A's hardware
+5. **Hardware-direct access**: When GPU A's SM accesses the mapped VA, the MMU routes through the PMT to obtain the peer physical address; the NVLink controller delivers data directly
+
+```c
+// NVLink P2P mapping setup (from GPU A's perspective)
+CUmemGenericAllocationHandle peerHandle;
+cuMemImportFromShareableHandle(&peerHandle, &fabricHandle,
+    CU_MEM_HANDLE_TYPE_FABRIC);
+
+CUdeviceptr peerPtr;
+cuMemAddressReserve(&peerPtr, size, 0, 0, 0);
+cuMemMap(peerPtr, size, 0, peerHandle, 0);
+
+// Key step: triggers Peer Mapping Table entry write
+CUmemAccessDesc accessDesc = {};
+accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+accessDesc.location.id = gpuB_device;
+accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+cuMemSetAccess(peerPtr, size, &accessDesc, 1);
+
+// GPU A can now directly read/write GPU B's VRAM via peerPtr
+// NVLink hardware handles address translation and data transfer
+```
+
+> **Fundamental difference from BAR1**: In the PCIe BAR1 path, address translation happens on the **target GPU** (GPU B's BAR1 decoder).
+> In the NVLink path, translation occurs on the **source GPU A** via its Peer Mapping Table—
+> data arrives at GPU B already carrying the correct physical address, requiring no decoder.
+
+### MNNVL: Cross-Node NVLink Domain
+
+Starting with Hopper, **Multi-Node NVLink (MNNVL)** unifies GPUs across nodes into a single NVLink fabric —
+enabling direct memory access without network stack overhead (InfiniBand/RoCE).
+
+---
+
+## 6. GPUDirect & BAR
+
+| Technology | Data Path | BAR Relationship |
+|-----------|-----------|-----------------|
+| GPUDirect P2P | GPU ↔ GPU | Peer BAR1 (PCIe) or NVLink mapping |
+| GPUDirect RDMA | NIC ↔ GPU | NIC DMA writes directly to BAR1 |
+| GPUDirect Storage | NVMe ↔ GPU | Storage DMA through BAR1 |
+
+---
+
+## Summary
+
+| Layer | Mechanism | Responsibility |
+|-------|-----------|---------------|
+| **PCIe Hardware** | BAR registers | Map device memory into system address space |
+| **GPU Internal** | BAR1 decoder + page table | System address → VRAM physical address |
+| **GPU Driver** | BAR1 page table management | Dynamic mapping allocation/reclaim |
+| **CUDA VMM** | cuMemCreate / Map / SetAccess | User-space virtual memory management |
+| **GPUDirect** | Persistent BAR1 mapping | Enable NIC/NVMe direct DMA to VRAM |

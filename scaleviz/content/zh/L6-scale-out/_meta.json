@@ -1,0 +1,9 @@
+{
+  "topics": [
+    { "id": "interconnect", "label_zh": "集群互联", "label_en": "Interconnect" },
+    { "id": "collective-comm", "label_zh": "集合通信", "label_en": "Collectives" },
+    { "id": "topology", "label_zh": "拓扑与路由", "label_en": "Topology & Routing" },
+    { "id": "in-network", "label_zh": "在网计算", "label_en": "In-Network Computing" },
+    { "id": "cluster-mgmt", "label_zh": "集群管理", "label_en": "Cluster Management" }
+  ]
+}

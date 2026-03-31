@@ -1,0 +1,8 @@
+{
+  "topics": [
+    { "id": "sm", "label_zh": "SM 流式多处理器", "label_en": "Streaming Multiprocessor" },
+    { "id": "memory-hierarchy", "label_zh": "显存层次", "label_en": "Memory Hierarchy" },
+    { "id": "tensor-core", "label_zh": "Tensor Core", "label_en": "Tensor Core" },
+    { "id": "generation", "label_zh": "架构代际演进", "label_en": "Architecture Generations" }
+  ]
+}

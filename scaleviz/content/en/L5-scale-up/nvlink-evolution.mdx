@@ -1,0 +1,45 @@
+---
+title: "NVLink Evolution: From 1.0 to 5.0"
+description: "Deep dive into five generations of NVIDIA NVLink interconnect technology"
+date: 2026-03-27
+layer: L5
+topic: nvlink
+difficulty: intermediate
+tags: [nvlink, scale-up, gpu-interconnect]
+---
+
+# NVLink Evolution: From 1.0 to 5.0
+
+In the era of large AI models, a single GPU is far from sufficient. How to make
+multiple GPUs within one node collaborate efficiently is the core challenge of
+Scale-Up. NVIDIA's answer is **NVLink**.
+
+## Why NVLink?
+
+Traditional PCIe bus bandwidth is limited:
+
+- PCIe 3.0 x16: ~32 GB/s (bidirectional)
+- PCIe 4.0 x16: ~64 GB/s (bidirectional)
+- PCIe 5.0 x16: ~128 GB/s (bidirectional)
+
+In multi-GPU training, collective communication operations like AllReduce need
+to exchange large amounts of gradient data between GPUs. PCIe often becomes the
+bottleneck. NVLink was designed specifically to solve this problem.
+
+## NVLink Generations
+
+| Gen | First Architecture | Per-link BW | Links | Total BW |
+|-----|-------------------|-------------|-------|----------|
+| NVLink 1.0 | Pascal (P100) | 20 GB/s | 4 | 160 GB/s |
+| NVLink 2.0 | Volta (V100) | 25 GB/s | 6 | 300 GB/s |
+| NVLink 3.0 | Ampere (A100) | 25 GB/s | 12 | 600 GB/s |
+| NVLink 4.0 | Hopper (H100) | 25 GB/s | 18 | 900 GB/s |
+| NVLink 5.0 | Blackwell (B200) | 50 GB/s | 18 | 1800 GB/s |
+
+> From P100 to B200, NVLink total bandwidth grew **11×**.
+
+## Summary
+
+NVLink is the cornerstone of NVIDIA's Scale-Up strategy.
+Understanding NVLink's bandwidth, topology, and limitations
+is the first step toward understanding modern AI infrastructure.

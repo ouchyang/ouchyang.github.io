@@ -1,0 +1,56 @@
+---
+title: "NVLink 演进：从 1.0 到 5.0"
+description: "深入解析 NVIDIA NVLink 五代互联技术的带宽、拓扑与架构演进"
+date: 2026-03-27
+layer: L5
+topic: nvlink
+difficulty: intermediate
+tags: [nvlink, scale-up, gpu-interconnect]
+---
+
+# NVLink 演进：从 1.0 到 5.0
+
+在 AI 大模型时代，单个 GPU 的算力远远不够。如何让同一节点内的多颗 GPU 高效协同，
+成为 Scale-Up 的核心问题。NVIDIA 的答案就是 **NVLink**。
+
+## 为什么需要 NVLink？
+
+传统的 PCIe 总线带宽有限：
+
+- PCIe 3.0 x16: 约 32 GB/s（双向）
+- PCIe 4.0 x16: 约 64 GB/s（双向）
+- PCIe 5.0 x16: 约 128 GB/s（双向）
+
+而在多 GPU 训练中，AllReduce 等集合通信操作需要在 GPU 之间大量交换梯度数据，
+PCIe 往往成为瓶颈。NVLink 就是为解决这个问题而生的专有高速互联。
+
+## NVLink 代际演进
+
+| 代际 | 首发架构 | 单链路带宽 | 链路数 | 总带宽 |
+|------|---------|-----------|--------|--------|
+| NVLink 1.0 | Pascal (P100) | 20 GB/s | 4 | 160 GB/s |
+| NVLink 2.0 | Volta (V100) | 25 GB/s | 6 | 300 GB/s |
+| NVLink 3.0 | Ampere (A100) | 25 GB/s | 12 | 600 GB/s |
+| NVLink 4.0 | Hopper (H100) | 25 GB/s | 18 | 900 GB/s |
+| NVLink 5.0 | Blackwell (B200) | 50 GB/s | 18 | 1800 GB/s |
+
+> 从 P100 到 B200，NVLink 总带宽增长了 **11 倍**。
+
+## NVLink 与 NVSwitch
+
+从 Volta 开始，NVIDIA 引入了 **NVSwitch** 芯片，
+实现节点内所有 GPU 的全互联（all-to-all）拓扑：
+
+- **DGX A100**: 6 颗 NVSwitch 3.0 连接 8 颗 A100
+- **DGX H100**: 4 颗 NVSwitch 4.0 连接 8 颗 H100
+- **GB200 NVL72**: 多颗 NVSwitch 连接 72 颗 Blackwell GPU
+
+NVSwitch 使得节点内任意两颗 GPU 之间都能以全带宽直接通信，
+不需要经过 PCIe Switch 或 CPU 中转。
+
+## 小结
+
+NVLink 是 NVIDIA Scale-Up 战略的基石。理解 NVLink 的带宽、拓扑和限制，
+是理解现代 AI 基础设施的第一步。
+
+下一篇我们将深入探讨 NVSwitch 的全互联拓扑原理。

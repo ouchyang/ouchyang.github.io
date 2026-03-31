@@ -1,0 +1,58 @@
+{
+  "nav": {
+    "home": "首页",
+    "topics": "主题",
+    "playground": "实验场",
+    "about": "关于",
+    "search": "搜索文章..."
+  },
+  "layers": {
+    "L1": "硬件与物理互联",
+    "L2": "芯片架构",
+    "L3": "通信协议",
+    "L4": "驱动与运行时",
+    "L5": "Scale-Up",
+    "L6": "Scale-Out",
+    "L7": "并行策略",
+    "L8": "模型训练",
+    "L9": "推理应用"
+  },
+  "home": {
+    "title": "AI Scale-Up/Out 交互式教学",
+    "subtitle": "从芯片到万卡集群，用交互动画理解 AI 基础设施",
+    "explore": "探索九层架构",
+    "tagline": "Don't just explain — let them play with it.",
+    "sectionTitle": "探索全栈架构",
+    "sectionDesc": "从半导体物理到大模型应用，9 个层级覆盖 AI 基础设施完整技术栈"
+  },
+  "article": {
+    "readTime": "{minutes} 分钟阅读",
+    "difficulty": {
+      "beginner": "初级",
+      "intermediate": "中级",
+      "advanced": "高级"
+    },
+    "prerequisites": "前置知识",
+    "nextReading": "后续阅读",
+    "switchLang": "Read in English",
+    "toc": "目录"
+  },
+  "animations": {
+    "controls": {
+      "play": "播放",
+      "pause": "暂停",
+      "next": "下一步",
+      "prev": "上一步",
+      "reset": "重置",
+      "fullscreen": "全屏",
+      "speed": "速度",
+      "step": "步骤 {current} / {total}"
+    }
+  },
+  "common": {
+    "backToTop": "回到顶部",
+    "notFound": "页面未找到",
+    "notFoundDesc": "你访问的页面不存在",
+    "backHome": "返回首页"
+  }
+}

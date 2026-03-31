@@ -1,0 +1,8 @@
+{
+  "topics": [
+    { "id": "nvlink", "label_zh": "NVLink 互联", "label_en": "NVLink Interconnect" },
+    { "id": "nvswitch", "label_zh": "NVSwitch", "label_en": "NVSwitch" },
+    { "id": "dgx", "label_zh": "DGX 节点架构", "label_en": "DGX Node Architecture" },
+    { "id": "chiplet", "label_zh": "Chiplet 与异构融合", "label_en": "Chiplet & Heterogeneous" }
+  ]
+}

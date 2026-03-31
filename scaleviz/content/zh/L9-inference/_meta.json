@@ -1,0 +1,8 @@
+{
+  "topics": [
+    { "id": "kv-cache", "label_zh": "KV Cache 管理", "label_en": "KV Cache Management" },
+    { "id": "batching", "label_zh": "动态批处理", "label_en": "Dynamic Batching" },
+    { "id": "disaggregation", "label_zh": "推理解耦架构", "label_en": "Disaggregated Inference" },
+    { "id": "quantization", "label_zh": "量化与蒸馏", "label_en": "Quantization & Distillation" }
+  ]
+}

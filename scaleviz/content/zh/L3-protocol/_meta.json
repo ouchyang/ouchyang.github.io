@@ -1,0 +1,10 @@
+{
+  "topics": [
+    { "id": "nv-protocol", "label_zh": "NV 协议", "label_en": "NV Protocol" },
+    { "id": "ib-verbs", "label_zh": "IB Verbs / RDMA", "label_en": "IB Verbs / RDMA" },
+    { "id": "sue", "label_zh": "SUE", "label_en": "SUE" },
+    { "id": "oisa", "label_zh": "OISA", "label_en": "OISA" },
+    { "id": "uec", "label_zh": "UEC Transport", "label_en": "UEC Transport" },
+    { "id": "ecosystem", "label_zh": "协议生态", "label_en": "Protocol Ecosystem" }
+  ]
+}

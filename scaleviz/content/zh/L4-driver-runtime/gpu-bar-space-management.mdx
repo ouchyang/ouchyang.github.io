@@ -1,0 +1,482 @@
+---
+title: "GPU BAR 空间管理与映射"
+description: "从 PCIe BAR 寄存器到 NVIDIA GPU 驱动的虚拟内存管理，理解 GPU 显存如何被映射到系统地址空间"
+date: 2026-03-27
+layer: L4
+topic: bar-mapping
+difficulty: advanced
+tags: [bar, pcie, gpu-driver, virtual-memory, mmio, rebar, p2p]
+---
+
+# GPU BAR 空间管理与映射
+
+在多 GPU 系统中，一个根本的问题是：**CPU 和其他设备如何访问 GPU 的显存？**
+
+答案是 **PCIe BAR (Base Address Register) 空间映射** —— 这是 GPU 驱动层最基础的职责之一。
+本文从 PCIe 硬件规范出发，逐层讲解 NVIDIA GPU 驱动如何管理 BAR 空间，
+以及现代 CUDA VMM API 如何在此之上构建灵活的虚拟内存抽象。
+
+---
+
+## 1. PCIe BAR：设备内存的"对外窗口"
+
+### 1.1 什么是 BAR？
+
+每个 PCIe 设备在启动时，会通过**配置空间**（Configuration Space）向系统声明自己需要的地址范围。
+系统固件（BIOS/UEFI）或操作系统内核在 PCI 枚举阶段为其分配物理地址。
+这些地址范围就是 **BAR (Base Address Register)**。
+
+PCIe 规范允许每个 Function 最多 **6 个 32-bit BAR**，或 **3 个 64-bit BAR**。
+
+### 1.2 NVIDIA GPU 的 BAR 布局
+
+| BAR | 名称 | 用途 | 典型大小 |
+|-----|------|------|---------|
+| BAR0 | 寄存器空间 | GPU 引擎控制寄存器 (MMIO) | 16 ~ 32 MB |
+| BAR1 | FB 窗口 | 帧缓冲 / 显存对外映射窗口 | 256 MB ~ 全显存 |
+| BAR2/3 | 其他 | 附加寄存器 | 较小 |
+
+其中：
+
+- **BAR0** 是驱动与 GPU 硬件交互的入口。所有寄存器读写 —— 启动引擎、配置中断、查询状态 —— 都通过 BAR0 的 MMIO 映射完成。
+- **BAR1** 是显存的对外窗口。CPU、DMA 引擎、或其他 PCIe 设备需要读写 GPU 显存时，都必须经过 BAR1。
+
+### 1.3 BAR0 深入：GPU 的 MMIO 寄存器空间
+
+BAR0 是 GPU 驱动的 **命令与控制中心**。当内核驱动 `nvidia.ko` 加载时，
+它通过 `ioremap()` 将 BAR0 对应的系统物理地址映射到内核虚拟地址空间，
+此后所有对 GPU 硬件的操作都通过这个映射区域完成。
+
+<BAR0MMIOExplorer />
+
+#### BAR0 的地址空间结构
+
+BAR0 内部按功能划分为多个 **寄存器块**（Register Block），每个块对应 GPU 的一个子系统：
+
+| 地址范围 | 寄存器块 | 功能说明 |
+|---------|---------|---------|
+| 0x0000–0x0FFF | **PMC** (Master Control) | 芯片 ID、全局中断控制、引擎使能 |
+| 0x0700–0x07FF | **PTIMER** | GPU 内部计时器，纳秒级精度 |
+| 0x9000–0x9FFF | **PFIFO** | 命令 FIFO 引擎 — 处理 pushbuffer 命令队列 |
+| 0x20000–0x3FFFF | **PGRAPH** | 图形 / 计算引擎核心控制 |
+| 0x60000–0x6FFFF | **PDISPLAY** | 显示引擎（HDMI/DP 输出控制） |
+| 0x88000–0x88FFF | **PCE** | Copy Engine（DMA 拷贝引擎）控制 |
+| 0x100000–0x10FFFF | **PFB** | 显存控制器接口（HBM/GDDR 配置） |
+| 0x110000–0x11FFFF | **PLTCG** | L2 Cache 全局配置 |
+| 0x800000+ | **PRIV_RING** | Falcon 微控制器 / 特权环 |
+
+#### BAR0 访问机制
+
+```c
+// 内核驱动中的 BAR0 访问模式
+void __iomem *bar0 = ioremap(pci_resource_start(pdev, 0),
+                             pci_resource_len(pdev, 0));
+
+// 读取 GPU Boot ID (确认芯片型号)
+u32 boot_id = readl(bar0 + 0x0000);
+
+// 启用/禁用 GPU 引擎
+writel(engine_mask, bar0 + 0x0640);
+```
+
+> **安全约束**：BAR0 是内核态专用的。用户态程序 **不能** 直接访问 BAR0—— 这是 NVIDIA 驱动安全模型的核心。
+> CUDA 用户态 API（如 `cuMemCreate`）通过 ioctl 向内核驱动发起请求，由驱动代为操作 BAR0 寄存器。
+
+#### BAR0 在 GPU 初始化中的角色
+
+1. **PCI 枚举后**：驱动 `ioremap(BAR0)` → 获得 MMIO 基址
+2. **读取 NV_PMC_BOOT_0**：确认 GPU 芯片型号与 revision
+3. **NV_PMC_ENABLE**：逐个启用 PFIFO、PGRAPH、PCE 等引擎
+4. **PTIMER 初始化**：配置 GPU 内部时钟频率
+5. **中断配置**：设置 NV_PMC_INTR_0 中断路由，绑定 PCIe MSI-X 向量
+6. **Falcon 固件加载**：通过 PRIV_RING 向 Falcon 微控制器上传固件
+
+### 1.4 查看 BAR 信息
+
+```bash
+# 通过 nvidia-smi 查看 BAR1 信息
+nvidia-smi -q | grep -A5 "BAR1"
+
+# 输出示例 (A100 80GB, ReBAR 关闭)
+#   BAR1 Memory Usage
+#     Total       : 256 MiB
+#     Used        : 1 MiB
+#     Free        : 255 MiB
+
+# 通过 lspci 查看所有 BAR
+lspci -vvv -s <GPU_BDF> | grep -i "region"
+
+# 输出示例
+# Region 0: Memory at fb000000 (32-bit) [size=16M]
+# Region 1: Memory at 27800000000 (64-bit, prefetchable) [size=256M]
+# Region 3: Memory at 27c00000000 (64-bit, prefetchable) [size=32M]
+```
+
+---
+
+## 2. BAR1 映射机制
+
+### 2.1 小 BAR 模式（传统）
+
+当 BAR1 只有 256 MB 而显存有 80 GB 时，驱动需要一个**滑动窗口**机制：
+
+<BAR1SlidingWindow vramGB={80} smallBarMB={256} />
+
+GPU 驱动内核模块 (`nvidia.ko`) 维护一个 **BAR1 页表**，记录 BAR1 窗口中的每个页面映射到显存的哪个物理地址。当需要访问不同区域时，驱动更新页表条目，将窗口"滑动"到新位置。
+
+这种模式的问题：
+- **频繁的页表更新**开销大
+- **映射冲突**：多个请求者争用有限的窗口
+- **BAR1 耗尽**：当映射需求超过 256 MB 时，部分操作会被阻塞或降级
+
+### 2.2 Resizable BAR (ReBAR)
+
+PCIe 规范定义了 **Resizable BAR Capability** (Extended Capability ID 0x15)。
+NVIDIA 从 Ampere 架构开始全面支持此特性：
+
+| GPU | 显存 | ReBAR 关闭时 BAR1 | ReBAR 开启时 BAR1 |
+|-----|------|-------------------|-------------------|
+| A100 | 40/80 GB | 256 MB | 40/80 GB |
+| H100 | 80 GB | 256 MB | 80 GB |
+| B200 | 192 GB | 256 MB | 192 GB |
+
+启用 ReBAR 需要：
+1. BIOS/UEFI 中启用 "Above 4G Decoding" 和 "Resizable BAR"
+2. GPU 驱动支持（nvidia-driver ≥ 460）
+3. 操作系统支持（Linux ≥ 5.12 原生支持）
+
+```bash
+# 验证 ReBAR 是否生效
+nvidia-smi -q | grep "BAR1" -A3
+#   Total: 81920 MiB   ← BAR1 = 全显存 = ReBAR 开启
+```
+
+> **性能影响**：ReBAR 对 CPU→GPU 传输（如 `cudaMemcpy` H2D）有显著加速，
+> 因为不再需要驱动频繁切换映射窗口。对 GPU→GPU P2P 通信也有帮助。
+
+---
+
+## 3. BAR 空间与 GPU 虚拟内存
+
+### 3.1 GPU 的 MMU 与页表
+
+现代 NVIDIA GPU 内部有一个 **MMU（Memory Management Unit）**，
+维护 GPU 进程的虚拟地址到物理显存的映射。
+
+当 **外部设备**（CPU 或另一个 GPU）要访问这块显存时，路径会有所不同。
+下方的交互动画展示了两条典型的地址翻译路径：
+
+<AddressTranslation />
+
+BAR1 本质上是 **"系统物理地址 → GPU 物理地址" 的第二层映射**。
+驱动需要同时管理两套页表。
+
+<Callout type="info">
+**两套页表的含义：**
+
+- **第一套：GPU 内部页表（GPU MMU 管理）**——将 GPU 虚拟地址（GVA）翻译为 GPU 物理地址（GPA）。每个 CUDA Context 拥有独立的页表，由 GPU 硬件 MMU 在 SM 发起访存时自动查询。这和 CPU 上进程各自拥有独立页表的逻辑完全类似。
+
+- **第二套：BAR1 页表（GPU 驱动管理）**——将 PCIe 总线上的系统物理地址（SPA）翻译为 GPU 物理地址（GPA）。当 CPU 或远端设备通过 PCIe 访问 GPU 显存时，数据首先到达 BAR1 地址范围，GPU 内部的 **BAR1 译码器** 查询这张页表，将 SPA 转换为 GPA，再读写实际的显存单元。
+
+两套页表各司其职：GPU 内部页表服务于 GPU 自身的 SM 访存；BAR1 页表服务于外部设备的 DMA / MMIO 访问。驱动在 `cudaMalloc`、`cuMemMap` 等操作中需要同步更新两张表，并在映射变更后执行 TLB flush 以保证一致性。
+</Callout>
+
+### 3.2 NVIDIA 驱动的 BAR1 页表管理
+
+GPU 驱动内部维护 BAR1 的映射关系，关键操作包括：
+
+| 操作 | 驱动行为 | 触发时机 |
+|------|---------|---------|
+| **Map** | 在 BAR1 页表中添加条目 | cudaMalloc + 需要外部访问时 |
+| **Unmap** | 移除 BAR1 页表条目 | cudaFree 或映射不再需要 |
+| **Migrate** | 更新条目指向新物理地址 | 显存碎片整理 / UVM 迁移 |
+| **Flush** | TLB 无效化 | 映射变更后确保一致性 |
+
+### 3.3 TLB Flush：为什么必须刷新？
+
+GPU 内部的 **TLB（Translation Lookaside Buffer）** 会缓存最近使用过的页表条目，以加速地址翻译。当驱动修改了 BAR1 页表（Map / Unmap / Migrate），TLB 可能仍然持有旧映射——如果不清除，外部 DMA 或 MMIO 访问就会被路由到 **错误的物理显存地址**，导致数据损坏甚至 GPU 挂起。
+
+TLB Flush 的核心流程：
+
+1. **驱动更新 BAR1 页表**——写入新的 SPA → GPA 映射
+2. **TLB 中残留旧条目**——此时 TLB 与页表不一致，属于 **危险窗口**
+3. **驱动发射 TLB Invalidate 命令**——GPU 硬件清除匹配的 TLB 行
+4. **后续访问触发 TLB Refill**——硬件从更新后的页表重新加载，一致性恢复
+
+下方动画演示了完整的 TLB flush 四步流程：
+
+<TLBFlushFlow />
+
+<Callout type="warning">
+**TLB flush 的代价：** Invalidate 操作本身很快（纳秒级），但后续的 TLB miss + refill 会暂时增加访问延迟。在高频率 Map/Unmap 场景（如弹性显存池）中，驱动通常会 **批量合并** 多次映射变更，最后只执行一次 flush，以摊薄开销。
+</Callout>
+
+---
+
+## 4. CUDA VMM API：用户态的 BAR 管理
+
+从 CUDA 10.2 开始，NVIDIA 通过 **cuMem API** 向用户态暴露了虚拟内存管理能力。
+这组 API 将传统的 `cudaMalloc`（一步完成分配+映射）拆分为三个独立步骤：
+
+### 4.1 三步分离
+
+<VMMPipeline />
+
+### 4.2 为什么需要分离？
+
+| 场景 | 传统 cudaMalloc | cuMem API |
+|------|----------------|-----------|
+| P2P 共享 | 只能通过 IPC handle | 同一 handle 映射到多个 GPU 的 VA 空间 |
+| 弹性内存 | 释放后指针失效 | 释放物理但保留 VA，resume 后指针依然有效 |
+| 访问控制 | 全有或全无 | 按设备精细授权（只读 / 读写） |
+| GPUDirect RDMA | 需要额外注册 | 分配时标记 `gpuDirectRDMACapable` |
+
+### 4.3 代码示例：完整的分配与映射
+
+```c
+CUmemAllocationProp prop = {};
+prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+prop.location.id = device;
+prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_FABRIC;
+
+// 查询是否支持 GPUDirect RDMA + VMM
+int rdmaFlag = 0;
+cuDeviceGetAttribute(&rdmaFlag,
+  CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED, device);
+if (rdmaFlag) prop.allocFlags.gpuDirectRDMACapable = 1;
+
+// 查询对齐粒度
+size_t granularity;
+cuMemGetAllocationGranularity(&granularity, &prop,
+  CU_MEM_ALLOC_GRANULARITY_MINIMUM);
+
+// ① 分配物理显存
+CUmemGenericAllocationHandle handle;
+cuMemCreate(&handle, ALIGN(size, granularity), &prop, 0);
+
+// ② 预留虚拟地址
+CUdeviceptr ptr;
+cuMemAddressReserve(&ptr, ALIGN(size, granularity), granularity, 0, 0);
+
+// ③ 映射 + 设置访问权限
+cuMemMap(ptr, ALIGN(size, granularity), 0, handle, 0);
+
+CUmemAccessDesc accessDesc = {};
+accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+accessDesc.location.id = device;
+accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+cuMemSetAccess(ptr, ALIGN(size, granularity), &accessDesc, 1);
+
+// 现在可以使用 ptr 了
+// ...
+
+// 释放：逆序操作
+cuMemUnmap(ptr, size);        // 解除映射
+cuMemRelease(handle);         // 释放物理显存
+cuMemAddressFree(ptr, size);  // 释放虚拟地址
+```
+
+---
+
+## 5. P2P 映射：跨 GPU 的 BAR 通路
+
+### 5.1 PCIe P2P 与 NVLink P2P
+
+<P2PDataFlow />
+
+**PCIe P2P**：当 GPU A 要直接读写 GPU B 的显存时，GPU A 发起 PCIe 写事务，PCIe Switch / Root Complex 根据地址路由到 GPU B 的 BAR1 范围，
+GPU B 的 BAR1 译码器将其转换为物理显存地址并完成写操作。
+
+上层软件只需要：
+
+1. **GPU A 调用** `cuMemSetAccess(ptr, ..., GPU_B_location)` — 授权 GPU B 访问
+2. **GPU B 的驱动**在 GPU B 的 BAR1 页表中创建映射条目
+3. GPU A 即可通过虚拟地址直接读写 GPU B 的显存
+
+**NVLink P2P**：NVLink 连接的 GPU 不通过 PCIe BAR，而是使用独立的地址映射机制（NVLink 对等映射表）。
+这绕过了 BAR1 的大小限制，可以映射对端的全部显存。
+
+### 5.2 跨进程 P2P（IPC / Fabric Handle）
+
+cuMem API 支持进程间共享物理内存句柄：
+
+| Handle 类型 | 传递方式 | 场景 | 最低 CUDA 版本 |
+|------------|---------|------|--------------|
+| POSIX File Descriptor | Unix Domain Socket | 同节点跨进程 | 11.3 |
+| Fabric Handle | 直接消息 | MNNVL 多节点 | 12.3 |
+
+导入方（GPU A）的流程：
+
+```c
+// 从进程间通道获得对端的 handle
+CUmemGenericAllocationHandle peerHandle;
+cuMemImportFromShareableHandle(&peerHandle, &fabricHandle,
+  CU_MEM_HANDLE_TYPE_FABRIC);
+
+// 映射到本地虚拟地址
+CUdeviceptr localPtr;
+cuMemAddressReserve(&localPtr, size, 0, 0, 0);
+cuMemMap(localPtr, size, 0, peerHandle, 0);
+cuMemSetAccess(localPtr, size, &accessDesc, 1);
+
+// 通过 localPtr 直接读写对端 GPU 的显存
+```
+
+---
+
+## 6. NVLink 深入：超越 PCIe 的 GPU 互联
+
+### 6.1 NVLink 代际演进
+
+NVLink 从 2016 年的 Pascal 架构首次引入，到 2024 年 Blackwell 架构的 NVLink 5，
+带宽增长超过 **11 倍**，远超同期 PCIe 的演进速度：
+
+<NVLinkBandwidth />
+
+### 6.2 NVSwitch：全互联的关键
+
+单靠 NVLink 只能实现 GPU 之间的 **点对点** 连接。
+要在 8 个 GPU 之间实现全互联（any-to-any），需要 **NVSwitch** 作为交换矩阵。
+
+<NVLinkTopology />
+
+#### NVSwitch 的角色
+
+NVSwitch 本质上是一个 **NVLink 交换芯片**，功能类似以太网交换机：
+
+| 特性 | NVSwitch 3 (A100) | NVSwitch 4 (H100) | NVSwitch 5 (B200) |
+|------|-------------------|-------------------|-------------------|
+| 端口数 | 36 × NVLink 3 | 64 × NVLink 4 | 64 × NVLink 5 |
+| 交换带宽 | 3.6 TB/s | 6.4 TB/s | 12.8 TB/s |
+| 在网计算 | ❌ | ✅ SHARP v3 | ✅ SHARP v4 |
+| 最大 GPU 数 | 8 (DGX) / 16 (MNNVL) | 8 (DGX) / 256 (MNNVL) | 8 (DGX) / 576 (NVL72×8) |
+
+在 DGX 系统中，**每个 GPU 通过 NVLink 连接到所有 NVSwitch**；
+NVSwitch 负责将数据包路由到目标 GPU，实现无阻塞的全带宽互联。
+
+#### NVLink 地址映射 vs BAR1
+
+NVLink P2P **不使用 BAR1**，而是通过 GPU 硬件内的 **NVLink 对等映射表（Peer Mapping Table）** 实现地址翻译。
+下方的交互式动画对比了 PCIe BAR1 路径和 NVLink 对等映射路径中每一步的差异——
+点击 **Play** 或逐步浏览，观察地址翻译和数据流的完整过程：
+
+<NVLinkPeerMapping />
+
+##### 两条路径的关键差异
+
+| 维度 | BAR1 映射 (PCIe) | NVLink 对等映射 |
+|------|-----------------|-------------|
+| 映射容量 | 受 BAR1 大小限制（256 MB~全显存） | 可映射对端**全部**显存 |
+| 延迟 | ~1–2 μs (PCIe 事务) | ~0.5 μs |
+| 带宽 | 64 GB/s (PCIe 5.0 x16) | 900–1800 GB/s |
+| 地址翻译 | BAR1 译码器 + 页表（SPA → GPA） | **Peer Mapping Table**（GVA → Peer GPA） |
+| 原子操作 | 有限支持 | 完整原子操作（atomicAdd 等） |
+| 映射建立 | 驱动更新 BAR1 页表 + TLB flush | cuMemSetAccess → 硬件写入 PMT 条目 |
+
+##### Peer Mapping Table 的工作原理
+
+当 GPU A 需要访问 GPU B 的显存时，NVLink 的对等映射路径完全绕过了 PCIe BAR：
+
+1. **物理内存分配**：GPU B 上调用 `cuMemCreate` 分配物理显存，获得 `CUmemGenericAllocationHandle`
+2. **句柄导出**：`cuMemExportToShareableHandle` 将内存句柄导出为 Fabric Handle（跨节点）或 POSIX FD（同节点）
+3. **句柄导入**：GPU A 端调用 `cuMemImportFromShareableHandle` 导入对端句柄
+4. **访问授权**：`cuMemSetAccess(ptr, size, GPU_B_location)` 触发驱动在 GPU A 的硬件中写入 **Peer Mapping Table** 条目
+5. **硬件直连**：GPU A 的 SM 发起访存时，MMU 识别目标地址属于 NVLink 对端，查询 PMT 获得对端物理地址，NVLink 控制器直接路由数据
+
+```c
+// NVLink P2P 映射建立流程（GPU A 视角）
+CUmemGenericAllocationHandle peerHandle;
+cuMemImportFromShareableHandle(&peerHandle, &fabricHandle,
+    CU_MEM_HANDLE_TYPE_FABRIC);
+
+CUdeviceptr peerPtr;
+cuMemAddressReserve(&peerPtr, size, 0, 0, 0);
+cuMemMap(peerPtr, size, 0, peerHandle, 0);
+
+// 关键一步：触发 Peer Mapping Table 条目写入
+CUmemAccessDesc accessDesc = {};
+accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+accessDesc.location.id = gpuB_device;
+accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+cuMemSetAccess(peerPtr, size, &accessDesc, 1);
+
+// 此后 GPU A 可以直接通过 peerPtr 读写 GPU B 的显存
+// NVLink 硬件自动完成地址翻译和数据传输
+```
+
+> **与 BAR1 路径的本质区别**：PCIe BAR1 路径中，地址翻译发生在 **目标 GPU 侧**（GPU B 的 BAR1 译码器）；
+> 而 NVLink 路径中，地址翻译发生在 **发起方** GPU A 的 Peer Mapping Table 中——
+> 数据到达 GPU B 时已经携带了正确的物理地址，无需再经过任何译码器。
+
+驱动在配置 P2P 访问时会自动选择最优路径：如果两个 GPU 之间有 NVLink 连接，使用 NVLink 映射；否则回退到 PCIe BAR1。
+
+### 6.3 MNNVL：跨节点的 NVLink 域
+
+从 Hopper 架构开始，NVIDIA 引入 **Multi-Node NVLink (MNNVL)**——
+通过 NVSwitch 将多个节点的 GPU 统一到同一个 NVLink 域中：
+
+| 平台 | 节点数 | GPU 总数 | NVLink 域带宽 |
+|------|-------|---------|-------------|
+| DGX H100 SuperPOD | 2 nodes | 16 GPUs | 7.2 TB/s × 2 |
+| DGX B200 NVL72 | 9 nodes | 72 GPUs | NVL72 全域 |
+| GB200 NVL72 | 9 trays | 72 GPUs | 全域 NVLink 5 |
+
+在 MNNVL 域内，GPU 之间可以像单节点内一样直接读写对端显存，
+无需走网络协议栈（InfiniBand/RoCE），大幅降低集合通信延迟。
+
+---
+
+## 7. GPUDirect 技术栈与 BAR
+
+BAR1 不仅是 GPU 间通信的基础，也是 **GPUDirect 技术栈**的底座：
+
+| 技术 | 数据路径 | BAR 关系 |
+|------|---------|---------|
+| GPUDirect P2P | GPU ↔ GPU | 通过对端 BAR1（PCIe）或 NVLink 映射 |
+| GPUDirect RDMA | NIC ↔ GPU | NIC 通过 BAR1 的 DMA 直接写入显存 |
+| GPUDirect Storage | NVMe ↔ GPU | 存储设备通过 BAR1 的 DMA 直接传输 |
+
+`cuMemCreate` 时设置 `gpuDirectRDMACapable = 1`，
+驱动会确保分配的物理页在 BAR1 中有持久映射，使网卡可以随时通过 DMA 访问。
+
+---
+
+## 8. 调试与诊断
+
+```bash
+# 查看所有 GPU 的 BAR1 使用情况
+nvidia-smi -q | grep -A5 "BAR1"
+
+# 查看 PCIe BAR 分配详情
+lspci -vvv -s $(nvidia-smi --query-gpu=pci.bus_id \
+  --format=csv,noheader | head -1) | grep -i region
+
+# 查看 P2P 连通性矩阵
+nvidia-smi topo -p2p r
+
+# 查看是否支持 ATS (Address Translation Services)
+lspci -vvv -s <BDF> | grep -i "ATS"
+```
+
+| 常见问题 | 表现 | 排查方向 |
+|---------|------|---------|
+| BAR1 耗尽 | `cudaMalloc` 成功但 CPU 访问失败 | `nvidia-smi -q` 查看 BAR1 Used |
+| P2P 不可用 | 回退到 host staging | `nvidia-smi topo -p2p r` 查看连通性 |
+| ReBAR 未生效 | BAR1 仍为 256 MB | 检查 BIOS 设置 + Above 4G Decoding |
+| RDMA 注册失败 | GPUDirect RDMA error | 确认 `nvidia-peermem` 模块加载 |
+
+---
+
+## 小结
+
+| 层次 | 机制 | 职责 |
+|------|------|------|
+| **PCIe 硬件** | BAR 寄存器 | 将设备内存映射到系统地址空间 |
+| **GPU 内部** | BAR1 译码器 + 页表 | 系统地址 → 显存物理地址的转换 |
+| **GPU 驱动** | BAR1 页表管理 | 动态分配/回收映射窗口 |
+| **CUDA VMM** | cuMemCreate / Map / SetAccess | 用户态虚拟内存管理 |
+| **GPUDirect** | BAR1 持久映射 | 让 NIC / NVMe 直接 DMA 显存 |
+
+BAR 空间管理贯穿了从硬件到用户态的整条链路。理解它不仅有助于排查 GPU 直通、
+P2P 通信等底层问题，也是理解上层通信库（如 NCCL）内存管理设计的前提。

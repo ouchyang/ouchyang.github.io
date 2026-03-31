@@ -1,0 +1,10 @@
+{
+  "topics": [
+    { "id": "cuda-driver", "label_zh": "CUDA 驱动", "label_en": "CUDA Driver" },
+    { "id": "cuda-runtime", "label_zh": "CUDA Runtime", "label_en": "CUDA Runtime" },
+    { "id": "bar-mapping", "label_zh": "BAR 空间管理与映射", "label_en": "BAR Space Management" },
+    { "id": "fabric-manager", "label_zh": "Fabric Manager", "label_en": "Fabric Manager" },
+    { "id": "dcgm", "label_zh": "DCGM 监控", "label_en": "DCGM Monitoring" },
+    { "id": "ras", "label_zh": "RAS 可靠性", "label_en": "RAS Reliability" }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "nav": {
+    "home": "Home",
+    "topics": "Topics",
+    "playground": "Playground",
+    "about": "About",
+    "search": "Search articles..."
+  },
+  "layers": {
+    "L1": "Hardware & Physical",
+    "L2": "Chip Architecture",
+    "L3": "Protocols",
+    "L4": "Driver & Runtime",
+    "L5": "Scale-Up",
+    "L6": "Scale-Out",
+    "L7": "Parallelism",
+    "L8": "Training",
+    "L9": "Inference"
+  },
+  "home": {
+    "title": "AI Scale-Up/Out Interactive Learning",
+    "subtitle": "From chips to 10K-GPU clusters — learn AI infra through interactive animations",
+    "explore": "Explore 9-Layer Architecture",
+    "tagline": "Don't just explain — let them play with it.",
+    "sectionTitle": "Explore the Full Stack",
+    "sectionDesc": "9 layers covering the complete AI infrastructure stack, from semiconductor physics to model serving"
+  },
+  "article": {
+    "readTime": "{minutes} min read",
+    "difficulty": {
+      "beginner": "Beginner",
+      "intermediate": "Intermediate",
+      "advanced": "Advanced"
+    },
+    "prerequisites": "Prerequisites",
+    "nextReading": "Next Reading",
+    "switchLang": "阅读中文版",
+    "toc": "Table of Contents"
+  },
+  "animations": {
+    "controls": {
+      "play": "Play",
+      "pause": "Pause",
+      "next": "Next",
+      "prev": "Previous",
+      "reset": "Reset",
+      "fullscreen": "Fullscreen",
+      "speed": "Speed",
+      "step": "Step {current} / {total}"
+    }
+  },
+  "common": {
+    "backToTop": "Back to top",
+    "notFound": "Page not found",
+    "notFoundDesc": "The page you are looking for does not exist",
+    "backHome": "Back to home"
+  }
+}

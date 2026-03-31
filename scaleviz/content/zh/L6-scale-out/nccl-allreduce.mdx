@@ -1,0 +1,44 @@
+---
+title: "NCCL Ring AllReduce: 从直觉到实现"
+description: "用交互动画理解 Ring AllReduce 算法的每一步"
+date: 2026-03-27
+layer: L6
+topic: collective-comm
+difficulty: intermediate
+tags: [nccl, allreduce, collective-communication]
+---
+
+# Ring AllReduce: 从直觉到实现
+
+在多 GPU 训练中，梯度同步是性能瓶颈之一。**Ring AllReduce** 是一种经典的集合通信算法，
+它让所有 GPU 上的数据最终达到一致，同时充分利用节点内和节点间的带宽。
+
+## 核心思想
+
+Ring AllReduce 将 N 个 GPU 组成一个环，算法分两阶段：
+
+1. **Scatter-Reduce**: 每个 GPU 把自己的数据分成 N 份，沿环传递并累加
+2. **Allgather**: 每个 GPU 将最终结果沿环传播，使所有人拥有完整结果
+
+## 为什么 Ring 比 Tree 更带宽高效？
+
+对于 N 个 GPU、总数据量为 D 的场景：
+
+- **朴素方案** (全连接): 通信量 = O(N · D)
+- **Ring AllReduce**: 通信量 = 2(N-1)/N · D ≈ **2D**
+
+Ring 的通信量与 GPU 数量几乎无关！这使其成为大规模训练的首选。
+
+## NCCL 中的实现
+
+NVIDIA NCCL (NVIDIA Collective Communications Library) 在 Ring AllReduce
+的基础上做了大量优化：
+
+- **多环并行**: 利用 NVLink 的多链路同时运行多个环
+- **Tree AllReduce**: 对于大消息在节点间使用树形拓扑
+- **SHARP 在网计算**: 利用 InfiniBand 交换机直接在网络中做归约
+
+## 小结
+
+Ring AllReduce 是分布式训练的基石算法。理解了它，
+你就理解了 NCCL 和大规模训练通信的核心逻辑。

@@ -1,0 +1,6 @@
+{
+  "topics": [
+    { "id": "perf-model", "label_zh": "跨层性能建模", "label_en": "Cross-Layer Perf Modeling" },
+    { "id": "bottleneck", "label_zh": "瓶颈分析", "label_en": "Bottleneck Analysis" }
+  ]
+}

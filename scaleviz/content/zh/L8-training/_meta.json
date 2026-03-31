@@ -1,0 +1,9 @@
+{
+  "topics": [
+    { "id": "megatron", "label_zh": "Megatron-LM", "label_en": "Megatron-LM" },
+    { "id": "deepspeed", "label_zh": "DeepSpeed", "label_en": "DeepSpeed" },
+    { "id": "fsdp", "label_zh": "PyTorch FSDP", "label_en": "PyTorch FSDP" },
+    { "id": "checkpoint", "label_zh": "检查点与容错", "label_en": "Checkpoint & Fault Tolerance" },
+    { "id": "profiling", "label_zh": "性能分析", "label_en": "Profiling" }
+  ]
+}

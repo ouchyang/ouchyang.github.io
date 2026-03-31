@@ -1,0 +1,8 @@
+{
+  "topics": [
+    { "id": "gpu-arch", "label_zh": "GPU 微架构", "label_en": "GPU Microarchitecture" },
+    { "id": "hbm", "label_zh": "HBM 显存", "label_en": "HBM Memory" },
+    { "id": "switch-asic", "label_zh": "交换芯片 ASIC", "label_en": "Switch ASIC" },
+    { "id": "nic", "label_zh": "SmartNIC / DPU", "label_en": "SmartNIC / DPU" }
+  ]
+}

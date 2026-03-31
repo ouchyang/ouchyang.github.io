@@ -1,0 +1,10 @@
+{
+  "topics": [
+    { "id": "data-parallel", "label_zh": "数据并行 (DP)", "label_en": "Data Parallelism" },
+    { "id": "tensor-parallel", "label_zh": "张量并行 (TP)", "label_en": "Tensor Parallelism" },
+    { "id": "pipeline-parallel", "label_zh": "流水线并行 (PP)", "label_en": "Pipeline Parallelism" },
+    { "id": "expert-parallel", "label_zh": "专家并行 (EP)", "label_en": "Expert Parallelism" },
+    { "id": "context-parallel", "label_zh": "上下文并行 (CP)", "label_en": "Context Parallelism" },
+    { "id": "hybrid-parallel", "label_zh": "混合并行策略", "label_en": "Hybrid Parallelism" }
+  ]
+}
