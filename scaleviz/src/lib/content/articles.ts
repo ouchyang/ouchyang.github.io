@@ -4,6 +4,12 @@ import matter from 'gray-matter';
 
 const contentDir = path.join(process.cwd(), 'content');
 
+function dateToString(v: unknown): string | undefined {
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === 'string') return v;
+  return undefined;
+}
+
 export interface ArticleMeta {
   slug: string;
   title: string;
@@ -38,7 +44,7 @@ export async function getArticlesForLayer(
         slug: file.replace(/\.mdx$/, ''),
         title: (data.title as string) || file.replace(/\.mdx$/, ''),
         description: data.description as string | undefined,
-        date: data.date as string | undefined,
+        date: dateToString(data.date),
         tags: data.tags as string[] | undefined,
         layer: data.layer as string | undefined,
         topic: data.topic as string | undefined,
@@ -70,7 +76,7 @@ export async function getArticleBySlug(
         slug,
         title: (data.title as string) || slug,
         description: data.description as string | undefined,
-        date: data.date as string | undefined,
+        date: dateToString(data.date),
         tags: data.tags as string[] | undefined,
         layer: data.layer as string | undefined,
         topic: data.topic as string | undefined,

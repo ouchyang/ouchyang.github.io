@@ -2,6 +2,7 @@ import type { MDXComponents } from 'mdx/types';
 import { Callout } from '@/components/ui/Callout';
 import { BAR1SlidingWindow, BAR0MMIOExplorer, AddressTranslation, VMMPipeline, P2PDataFlow, TLBFlushFlow } from '@/components/diagrams/bar';
 import { NVLinkTopology, NVLinkBandwidth, NVLinkPeerMapping } from '@/components/diagrams/nvlink';
+import { NetworkLayerStack, SwitchMACTable, SubnetCalculator, ARPFlow, CrossSubnetRouting, ThreeTableFlow } from '@/components/diagrams/network';
 import { PreBlock } from './PreBlock';
 
 export const mdxComponents: MDXComponents = {
@@ -89,4 +90,10 @@ export const mdxComponents: MDXComponents = {
   NVLinkTopology,
   NVLinkBandwidth,
   NVLinkPeerMapping,
+  NetworkLayerStack,
+  SwitchMACTable,
+  SubnetCalculator,
+  ARPFlow,
+  CrossSubnetRouting,
+  ThreeTableFlow,
 };

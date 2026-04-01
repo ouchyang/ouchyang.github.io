@@ -1,0 +1,174 @@
+---
+title: "IP · MAC · Subnet: Addressing Foundations for Cluster Networking"
+description: "From MAC addresses, IP addresses to subnetting — understand the addressing basics behind AI cluster communication"
+date: 2026-04-01
+layer: L6
+topic: network-fundamentals
+difficulty: beginner
+tags: [ip, mac, subnet, arp, routing, networking]
+---
+
+# IP · MAC · Subnet: Addressing Foundations for Cluster Networking
+
+In AI clusters, efficient communication among thousands of GPUs starts with one prerequisite — **every node must be precisely addressable**. Whether it's InfiniBand's LID/GID or Ethernet's IP/MAC, all network communication is rooted in **addressing**.
+
+This article covers the three foundational concepts for understanding Scale-Out cluster networking.
+
+---
+
+## 1. Network Layers and Addressing
+
+Computer networks use a layered design, each layer with its own addressing scheme. Click each layer below for details, or click **▶ 发送数据包** to watch data being encapsulated layer by layer:
+
+<NetworkLayerStack />
+
+> **In one sentence:** MAC addresses handle "last-mile" physical delivery; IP addresses handle "global navigation" for routing.
+
+---
+
+## 2. MAC Address: The NIC's "Identity Card"
+
+### 2.1 What is a MAC Address?
+
+A **MAC (Media Access Control) address** is the physical address of a network interface controller (NIC), burned in by the manufacturer at production time. It is **globally unique**.
+
+- **Length**: 48 bits (6 bytes)
+- **Notation**: Hexadecimal, e.g. `08:00:27:4a:5c:e3`
+- **Uniqueness**: One NIC, one unique MAC; a device with multiple NICs has multiple MACs
+
+### 2.2 MAC Address Structure
+
+| Part | Bytes | Assigned By | Example |
+|------|-------|-------------|---------|
+| **OUI (Vendor ID)** | First 3 | IEEE, globally assigned | `08:00:27` = Oracle/VirtualBox |
+| **NIC (Device ID)** | Last 3 | Vendor assigned | `4a:5c:e3` |
+
+### 2.3 Special MAC Addresses
+
+| Address | Meaning |
+|---------|---------|
+| `ff:ff:ff:ff:ff:ff` | **Broadcast** — sent to all devices in the subnet |
+| `01:xx:xx:xx:xx:xx` | **Multicast** — lowest bit of first byte is 1 |
+
+### 2.4 How Switches Use MAC Addresses
+
+Switches maintain a **MAC address table (forwarding table)** for precise frame delivery. The interactive animation below demonstrates the complete MAC learning process — click Step to observe:
+
+1. The switch learns source MAC addresses from incoming frames
+2. Unknown destinations trigger broadcast; known ones get unicast
+
+<SwitchMACTable />
+
+> MAC table entries have a **300-second** default aging time.
+
+---
+
+## 3. IP Address: The Network's "Logical Street Address"
+
+### 3.1 Why Do We Need IP When We Already Have MAC?
+
+| Property | MAC Address | IP Address |
+|----------|-----------|-----------|
+| Structure | Flat (no hierarchy) | Hierarchical (network + host) |
+| Based on | Device manufacturer | **Network topology** |
+| Mutability | Fixed at factory | Assignable (DHCP / static) |
+| Routing | ✗ Local segment only | ✓ Cross-subnet routing |
+| Layer | L2 Data Link | L3 Network |
+
+> **Analogy:** MAC is like a national ID number (permanent, but doesn't tell where you live). IP is like a street address (reflects your location, changes when you move).
+
+### 3.2 IPv4 Address Format
+
+IPv4 addresses are **32 bits (4 bytes)** in **dotted decimal** notation:
+
+| Format | Value |
+|--------|-------|
+| Binary | `11000000.10101000.00000001.01100100` |
+| Decimal | `192.168.1.100` |
+| Per octet | 8 bits · 8 bits · 8 bits · 8 bits |
+
+### 3.3 Special IP Addresses
+
+| Address | Meaning |
+|---------|---------|
+| `255.255.255.255` | Limited broadcast (local subnet only) |
+| `0.0.0.0` | This host / default route |
+| `127.0.0.1` | Loopback |
+| `10.x.x.x`, `172.16–31.x.x`, `192.168.x.x` | Private addresses |
+
+---
+
+## 4. Subnets and Subnet Masks
+
+### 4.1 What is a Subnet?
+
+A **subnet** divides a large IP network into smaller logical segments to:
+
+- Reduce broadcast domain size
+- Enhance security with access control between subnets
+- Improve IP address utilization
+
+### 4.2 Interactive Subnet Calculator
+
+Drag the CIDR slider to see network/host bits change in real-time; enter two IP addresses to instantly check if they're on the same subnet:
+
+<SubnetCalculator />
+
+> **CIDR notation:** `192.168.1.100/24` means 24 bits for the network portion. Usable hosts per subnet = 2^(host bits) − 2 (network address + broadcast address).
+
+---
+
+## 5. ARP: Bridging IP to MAC
+
+### 5.1 Why Do We Need ARP?
+
+Switches forward frames by MAC address, but applications only know the destination IP. **ARP (Address Resolution Protocol)** resolves an IP address to its corresponding MAC address.
+
+### 5.2 ARP Workflow
+
+Click through step by step to watch the full ARP resolution — from broadcast request to unicast reply, from empty cache to mutual learning:
+
+<ARPFlow />
+
+---
+
+## 6. Routing: Cross-Subnet Communication
+
+### 6.1 Key Principle
+
+When source and destination are in different subnets, a **router** forwards the packet. The core rule:
+
+> **IP addresses stay constant across hops; MAC addresses change at every hop.**
+
+### 6.2 Cross-Subnet Routing Animation
+
+Step through the journey of a packet from Host A (192.168.1.100) to Host B (192.168.2.50). Watch how the frame header's MAC addresses get rewritten at each hop:
+
+<CrossSubnetRouting />
+
+---
+
+## 7. Three Tables Working Together
+
+The key to understanding network communication lies in how **Routing Table · ARP Table · MAC Table** cooperate.
+
+Step through the animation below to observe the table lookups at each stage of cross-subnet forwarding:
+
+<ThreeTableFlow />
+
+| Table | Maintained By | Mapping | Layer |
+|-------|-------------|---------|-------|
+| **Routing Table** | Router / Host | Destination Network → Next Hop + Interface | L3 |
+| **ARP Table** | Each Host | IP → MAC | L2/L3 |
+| **MAC Table** | Switch | MAC → Physical Port | L2 |
+
+---
+
+## 8. Relevance to AI Cluster Networking
+
+- **Subnetting**: Organizing thousands of compute nodes by rack into subnets is fundamental to Fat-tree topology design
+- **ARP Storms**: Large-scale ARP broadcasts can bottleneck clusters — InfiniBand uses a centralized Subnet Manager instead
+- **RDMA Addressing**: RoCE v2 encapsulates RDMA over IP/UDP; IP and routing config directly affects NCCL communication performance
+- **ECMP Routing**: Equal-Cost Multi-Path routing depends on precise routing table configuration for parallel forwarding
+
+Understanding IP, MAC, and subnets is the first piece of the Scale-Out cluster networking puzzle.
